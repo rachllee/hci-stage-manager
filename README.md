@@ -1,6 +1,8 @@
 # Stage Crew Coordinator
 
 A React Native application for managing stage equipment and technical issues during live performances. Built with Expo and TypeScript.
+Credit: Cursor and ChatGPT Codex Medium was used to assist in generating code, as well as reformatting the README.
+
 
 ## 📋 Table of Contents
 
