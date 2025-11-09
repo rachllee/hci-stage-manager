@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,10 +6,11 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Dimensions,
 } from 'react-native';
 import * as Font from 'expo-font';
 import type { FontSource } from 'expo-font';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import { FilterButton } from './FilterButton';
 import { StageLayout } from './StageLayout';
 import { IssueCard } from './IssueCard';
@@ -44,11 +45,172 @@ const FONT_RESOURCES: Record<string, FontSource> = {
   },
 };
 
+type SyncStatus = 'connecting' | 'connected' | 'disconnected' | 'error' | 'unavailable';
+
+type SerializedIssue = Omit<Issue, 'reportedAt'> & { reportedAt: string };
+
+type StageStatePayload = {
+  equipment: Equipment[];
+  issues: SerializedIssue[];
+};
+
+type StageSyncExtra = {
+  stageSyncUrl?: string;
+  stageSyncHost?: string;
+  stageSyncPort?: number;
+};
+
+const logSync = (...args: unknown[]) => {
+  if (__DEV__) {
+    console.log('[stage-sync]', ...args);
+  }
+};
+
+const env =
+  ((globalThis as typeof globalThis & {
+    process?: { env?: Record<string, string | undefined> };
+  }).process?.env) ?? {};
+
+const sanitizeHost = (value: string) =>
+  value
+    .replace(/^https?:\/\//, '')
+    .replace(/^exp:\/\/\/?/, '')
+    .split('?')[0]
+    .split('/')[0];
+
+const parsePort = (value?: string | number, fallback = 4001) => {
+  if (value == null) return fallback;
+  const num = typeof value === 'string' ? Number(value) : value;
+  return Number.isFinite(num) && num > 0 ? num : fallback;
+};
+
+const normalizeWsUrl = (input: string, port?: number) => {
+  if (input.startsWith('ws://') || input.startsWith('wss://')) {
+    return input;
+  }
+  const sanitized = sanitizeHost(input);
+  const [hostPart, portPart] = sanitized.split(':');
+  const resolvedPort = portPart ? Number(portPart) : port;
+  return `ws://${hostPart}:${resolvedPort ?? 4001}`;
+};
+
+const getManualSyncUrl = () => {
+  const extra = Constants.expoConfig?.extra as StageSyncExtra | undefined;
+  const envUrl = env.EXPO_PUBLIC_STAGE_SYNC_URL ?? env.STAGE_SYNC_URL;
+  if (envUrl) {
+    logSync('Using EXPO_PUBLIC_STAGE_SYNC_URL/STAGE_SYNC_URL:', envUrl);
+    return normalizeWsUrl(envUrl);
+  }
+  if (extra?.stageSyncUrl) {
+    logSync('Using expo.extra.stageSyncUrl:', extra.stageSyncUrl);
+    return normalizeWsUrl(extra.stageSyncUrl);
+  }
+  const envHost =
+    env.EXPO_PUBLIC_STAGE_SYNC_HOST ??
+    env.STAGE_SYNC_HOST ??
+    extra?.stageSyncHost;
+  if (!envHost) return null;
+  logSync('Using explicit host override:', envHost);
+  const envPort =
+    env.EXPO_PUBLIC_STAGE_SYNC_PORT ??
+    env.STAGE_SYNC_PORT ??
+    extra?.stageSyncPort;
+  if (envPort) {
+    logSync('Using explicit port override:', envPort);
+  }
+  return normalizeWsUrl(envHost, parsePort(envPort));
+};
+
+const getHostCandidate = () => {
+  const expoConfigHost = Constants.expoConfig?.hostUri;
+  const manifestHost = (Constants as Record<string, unknown> & {
+    manifest?: { hostUri?: string };
+  }).manifest?.hostUri;
+  const manifest2Host = (Constants as Record<string, unknown> & {
+    manifest2?: { extra?: { expoClient?: { hostUri?: string } } };
+  }).manifest2?.extra?.expoClient?.hostUri;
+  const debuggerHost = (Constants as Record<string, unknown> & {
+    expoGoConfig?: { debuggerHost?: string };
+  }).expoGoConfig?.debuggerHost;
+
+  if (expoConfigHost || manifestHost || manifest2Host || debuggerHost) {
+    return expoConfigHost || manifestHost || manifest2Host || debuggerHost || null;
+  }
+
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const { hostname, port } = window.location;
+    if (hostname) {
+      const browserHost = port ? `${hostname}:${port}` : hostname;
+      logSync('Using browser location as fallback host:', browserHost);
+      return browserHost;
+    }
+  }
+
+  return null;
+};
+
+const getSyncServerUrl = () => {
+  const manualUrl = getManualSyncUrl();
+  if (manualUrl) {
+    logSync('Resolved manual sync URL:', manualUrl);
+    return manualUrl;
+  }
+  const hostCandidate = getHostCandidate();
+  if (!hostCandidate) {
+    logSync('No host candidate from Expo manifest/debugger metadata or browser fallback.');
+    return null;
+  }
+  const cleaned = sanitizeHost(hostCandidate);
+  const host = cleaned.split(':')[0];
+  if (!host) {
+    logSync('Failed to parse host from candidate:', hostCandidate);
+    return null;
+  }
+  const extra = Constants.expoConfig?.extra as { stageSyncPort?: number } | undefined;
+  const port = extra?.stageSyncPort ?? 4001;
+  logSync('Using Expo manifest host/port combo:', host, port);
+  return `ws://${host}:${port}`;
+};
+
+const serializeStageState = (equipment: Equipment[], issues: Issue[]): StageStatePayload => ({
+  equipment,
+  issues: issues.map((issue) => ({
+    ...issue,
+    reportedAt:
+      issue.reportedAt instanceof Date
+        ? issue.reportedAt.toISOString()
+        : new Date(issue.reportedAt).toISOString(),
+  })),
+});
+
+const deserializeStageState = (payload?: StageStatePayload | null) => {
+  if (!payload) return null;
+  return {
+    equipment: payload.equipment ?? [],
+    issues: (payload.issues ?? []).map((issue) => ({
+      ...issue,
+      reportedAt: new Date(issue.reportedAt),
+    })),
+  };
+};
+
+const createClientId = () => `client-${Math.random().toString(36).slice(2, 10)}`;
+
 export default function StageManagerScreen() {
   const [fontsReady, setFontsReady] = useState(false);
   const [equipment, setEquipment] = useState<Equipment[]>(MOCK_EQUIPMENT);
   const [issues, setIssues] = useState<Issue[]>(MOCK_ISSUES);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [clientId] = useState(createClientId);
+  const syncUrl = useMemo(() => getSyncServerUrl(), []);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(
+    syncUrl ? 'connecting' : 'unavailable'
+  );
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isApplyingRemoteRef = useRef(false);
+  const lastBroadcastRef = useRef<string | null>(null);
   
   // Current user state
   const [currentUser, setCurrentUser] = useState({ id: 'kp', name: 'KP', initials: 'KP' });
@@ -84,6 +246,98 @@ export default function StageManagerScreen() {
     loadFonts();
   }, []);
 
+  useEffect(() => {
+    if (!syncUrl) {
+      logSync('No sync URL resolved from manual or manifest info.');
+      setSyncStatus('unavailable');
+      setSyncError('Sync server unavailable on this build.');
+      return;
+    }
+
+    let isMounted = true;
+
+    const connect = () => {
+      if (!isMounted) return;
+      setSyncStatus('connecting');
+      setSyncError(null);
+      logSync('Attempting to connect to', syncUrl);
+
+      const socket = new WebSocket(syncUrl);
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        if (!isMounted) return;
+        setSyncStatus('connected');
+        logSync('Connected to sync server.');
+        socket.send(
+          JSON.stringify({
+            type: 'stage:request-state',
+            originId: clientId,
+          })
+        );
+      };
+
+      socket.onmessage = (event) => {
+        if (!isMounted) return;
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'stage:state' && message.payload) {
+            if (message.originId === clientId) {
+              return;
+            }
+            const nextState = deserializeStageState(message.payload);
+            if (nextState) {
+              isApplyingRemoteRef.current = true;
+              logSync('Received remote state', {
+                origin: message.originId,
+                equipment: nextState.equipment.length,
+                issues: nextState.issues.length,
+              });
+              lastBroadcastRef.current = JSON.stringify(message.payload);
+              setEquipment(nextState.equipment);
+              setIssues(nextState.issues);
+              setTimeout(() => {
+                isApplyingRemoteRef.current = false;
+              }, 0);
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to parse sync payload', error);
+        }
+      };
+
+      socket.onerror = () => {
+        if (!isMounted) return;
+        setSyncStatus('error');
+        setSyncError('Cannot reach local sync server.');
+        logSync('WebSocket error, marked as offline.');
+      };
+
+      socket.onclose = () => {
+        if (!isMounted) return;
+        setSyncStatus((prev) => (prev === 'error' ? prev : 'disconnected'));
+        logSync('Connection closed, scheduling reconnect...');
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+        reconnectTimeoutRef.current = setTimeout(connect, 2000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      isMounted = false;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (socketRef.current) {
+        logSync('Cleaning up WebSocket connection.');
+        socketRef.current.close();
+      }
+    };
+  }, [clientId, syncUrl]);
+
   // Live clock update
   useEffect(() => {
     const timer = setInterval(() => {
@@ -92,6 +346,40 @@ export default function StageManagerScreen() {
 
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!socketRef.current || syncStatus !== 'connected' || !syncUrl) {
+      return;
+    }
+    if (isApplyingRemoteRef.current) {
+      return;
+    }
+
+    const payload = serializeStageState(equipment, issues);
+    const payloadHash = JSON.stringify(payload);
+
+    if (lastBroadcastRef.current === payloadHash) {
+      return;
+    }
+
+    lastBroadcastRef.current = payloadHash;
+
+    try {
+      socketRef.current.send(
+        JSON.stringify({
+          type: 'stage:update',
+          payload,
+          originId: clientId,
+        })
+      );
+      logSync('Broadcasted stage update', {
+        equipmentCount: equipment.length,
+        issueCount: issues.length,
+      });
+    } catch (error) {
+      console.warn('Failed to broadcast stage update', error);
+    }
+  }, [equipment, issues, syncStatus, syncUrl, clientId]);
 
   // Active issues - exclude resolved
   const activeIssues = issues.filter(issue => issue.status !== 'resolved');
@@ -114,6 +402,22 @@ export default function StageManagerScreen() {
   
   // Get selected user info
   const selectedUserInfo = TEAM_MEMBERS.find(m => m.id === selectedUserId) || currentUser;
+
+  const syncBannerMeta = useMemo(() => {
+    switch (syncStatus) {
+      case 'connected':
+        return { color: COLORS.mintAccent, text: 'Live sync enabled' };
+      case 'connecting':
+        return { color: COLORS.amberHighlight, text: 'Syncing...' };
+      case 'disconnected':
+        return { color: COLORS.amberHighlight, text: 'Reconnecting sync...' };
+      case 'error':
+        return { color: COLORS.signalCoral, text: 'Sync offline' };
+      case 'unavailable':
+      default:
+        return { color: COLORS.slateMist, text: 'Sync unavailable' };
+    }
+  }, [syncStatus]);
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString('en-US', {
@@ -264,6 +568,14 @@ export default function StageManagerScreen() {
             <Text style={styles.profileText}>{currentUser.initials}</Text>
           </TouchableOpacity>
         </View>
+      </View>
+
+      <View style={styles.syncBanner}>
+        <View style={[styles.syncDot, { backgroundColor: syncBannerMeta.color }]} />
+        <Text style={styles.syncText}>{syncBannerMeta.text}</Text>
+        {syncError && (syncStatus === 'error' || syncStatus === 'unavailable') ? (
+          <Text style={styles.syncErrorText}>{syncError}</Text>
+        ) : null}
       </View>
 
       {/* Main Content */}
@@ -484,6 +796,33 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontFamily: FONTS.bold,
     color: COLORS.nightSky,
+  },
+  syncBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: COLORS.shadowBlue,
+    marginHorizontal: 20,
+    marginBottom: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  syncDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  syncText: {
+    fontSize: 13,
+    fontFamily: FONTS.medium,
+    color: COLORS.foam,
+  },
+  syncErrorText: {
+    marginLeft: 'auto',
+    fontSize: 12,
+    fontFamily: FONTS.mono,
+    color: COLORS.signalCoral,
   },
   mainContent: {
     flex: 1,
