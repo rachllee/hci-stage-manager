@@ -460,6 +460,14 @@ export default function StageManagerScreen() {
     setCreateIssueModalVisible(true);
   };
 
+  const handleDeleteEquipment = (equipmentId: string) => {
+    setEquipment((prev) => prev.filter((item) => item.id !== equipmentId));
+    setIssues((prev) => prev.filter((issue) => issue.equipmentId !== equipmentId));
+    setCreateIssueModalVisible(false);
+    setSelectedEquipment(null);
+    setExistingIssue(null);
+  };
+
   const handleSaveIssue = (issueData: any) => {
     if (existingIssue) {
       // Update existing issue
@@ -702,6 +710,7 @@ export default function StageManagerScreen() {
           setExistingIssue(null);
         }}
         onSave={handleSaveIssue}
+        onDeleteEquipment={handleDeleteEquipment}
       />
 
       <AddEquipmentModal
