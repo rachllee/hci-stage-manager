@@ -420,6 +420,36 @@ npx expo start --clear
 npm start -- --clear
 ```
 
+## 🔄 Local Live Sync
+
+Mirror stage changes across every device connected to the same Expo development session by running the lightweight WebSocket relay:
+
+1. **Start the relay server (new terminal)**
+   ```bash
+   cd stage-manager
+   npm run sync-server
+   ```
+2. **Launch Expo as usual**
+   ```bash
+   npm start
+   ```
+3. **Join from multiple devices**
+   - Ensure all devices are on the same Wi-Fi as the dev machine.
+   - Open the project via Expo Go or simulators; issue/equipment changes now propagate instantly.
+
+The relay stores everything in memory—restart it to clear state. It listens on `ws://<dev-machine-ip>:4001` by default; set `STAGE_SYNC_PORT` before running the script to pick a different port.
+
+#### Manual host override
+If the in-app banner still reports "Sync server unavailable on this build," Metro likely didn’t expose your LAN IP. Provide it explicitly when starting Expo:
+
+```bash
+EXPO_PUBLIC_STAGE_SYNC_HOST=192.168.1.23 npm start
+# or pass a full URL/port
+EXPO_PUBLIC_STAGE_SYNC_URL=ws://192.168.1.23:4001 npm start
+```
+
+You can also commit a default host/port under `expo.extra` in `app.json` if your setup rarely changes.
+
 #### Reset Metro bundler
 ```bash
 npx expo start --reset-cache
@@ -456,6 +486,7 @@ npx expo start --reset-cache
 
 ### Technical Features
 - **Real-time Updates**: Live clock updates every second
+- **Local Live Sync**: Optional WebSocket relay keeps multiple devices mirrored during a dev session (ephemeral state)
 - **Font Loading**: Custom Inter and Roboto Mono fonts
 - **Type Safety**: Full TypeScript implementation
 - **State Management**: React hooks for local state
