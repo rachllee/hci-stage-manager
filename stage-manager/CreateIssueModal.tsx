@@ -7,7 +7,9 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
+  Alert,
 } from 'react-native';
+import { SymbolView } from 'expo-symbols';
 import { Equipment, Issue, IssueStatus } from './types';
 import { COLORS, FONTS, TeamMember } from './constants';
 import { TimePicker } from './TimePicker';
@@ -40,6 +42,7 @@ interface CreateIssueModalProps {
     status: IssueStatus;
     customStatus?: { name: string; color: string };
   }) => void;
+  onDeleteEquipment?: (equipmentId: string) => void;
 }
 
 export const CreateIssueModal = ({
@@ -49,6 +52,7 @@ export const CreateIssueModal = ({
   teamMembers,
   onClose,
   onSave,
+  onDeleteEquipment,
 }: CreateIssueModalProps) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -158,6 +162,22 @@ export const CreateIssueModal = ({
     });
   };
 
+  const handleDelete = () => {
+    if (!equipment || !onDeleteEquipment) return;
+    Alert.alert(
+      'Delete equipment?',
+      `Remove "${equipment.label}" from the stage?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => onDeleteEquipment(equipment.id),
+        },
+      ]
+    );
+  };
+
   if (!equipment) return null;
 
   return (
@@ -176,9 +196,23 @@ export const CreateIssueModal = ({
               placeholder="Enter Problem Name Here"
               placeholderTextColor={COLORS.slateMist}
             />
-            <TouchableOpacity onPress={handleSave} style={styles.saveButtonHeader}>
-              <Text style={styles.saveText}>Save</Text>
-            </TouchableOpacity>
+            <View style={styles.headerActions}>
+              {onDeleteEquipment && (
+                <TouchableOpacity
+                  onPress={handleDelete}
+                  style={styles.deleteButton}
+                >
+                  <SymbolView
+                    name="trash.fill"
+                    tintColor={COLORS.signalCoral}
+                    style={styles.deleteIcon}
+                  />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={handleSave} style={styles.saveButtonHeader}>
+                <Text style={styles.saveText}>Save</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           <ScrollView style={styles.content}>
@@ -388,6 +422,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.shadowBlue,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 12,
+  },
   backButton: {
     width: 40,
     height: 40,
@@ -403,8 +442,21 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontFamily: FONTS.bold,
     color: COLORS.foam,
-    textAlign: 'center',
-    marginHorizontal: 20,
+    marginHorizontal: 12,
+  },
+  deleteButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.signalCoral,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  deleteIcon: {
+    width: 20,
+    height: 20,
   },
   saveButtonHeader: {
     backgroundColor: COLORS.mintAccent,
