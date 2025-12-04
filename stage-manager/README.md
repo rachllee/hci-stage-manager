@@ -103,8 +103,8 @@ HCI-STAGE-MANAGER/
   - `FONTS` - Font family names
   - `MOCK_EQUIPMENT` - Initial equipment data
   - `MOCK_ISSUES` - Initial issues data
-  - `TEAM_MEMBERS` - Team member list
-  - `updateTeamMember()` - Function to update team member info
+  - `DEFAULT_TEAM_MEMBERS` - Seed team member list
+  - `getInitials()` - Helper to derive initials from a name
 - **Lines**: ~50
 
 ### Main Screen

@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, LayoutChangeEvent } from 'react-native';
 import { Equipment } from './types';
 import { EquipmentItem } from './EquipmentItem';
 import { COLORS, FONTS } from './constants';
@@ -16,57 +17,107 @@ export const StageLayout = ({
   onStagePress,
   placingMode = false
 }: StageLayoutProps) => {
-  const LAYOUT_WIDTH = 900; // 1.5x wider
-  const LAYOUT_HEIGHT = 600;
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const ASPECT_RATIO = 1.5; // Prefer a wider stage, but stay responsive
 
-  const handleStagePress = (event: any) => {
-    if (placingMode && onStagePress) {
+  const handleContainerLayout = useCallback((event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setContainerSize((prev) =>
+      prev.width === width && prev.height === height ? prev : { width, height }
+    );
+  }, []);
+
+  const { stageWidth, stageHeight } = useMemo(() => {
+    const availableWidth = Math.max(0, containerSize.width - 24);
+    const availableHeight = Math.max(0, containerSize.height - 32);
+
+    if (!availableWidth || !availableHeight) {
+      return { stageWidth: 0, stageHeight: 0 };
+    }
+
+    let width = availableWidth;
+    let height = width / ASPECT_RATIO;
+
+    if (height > availableHeight) {
+      height = availableHeight;
+      width = height * ASPECT_RATIO;
+    }
+
+    return { stageWidth: width, stageHeight: height };
+  }, [ASPECT_RATIO, containerSize.height, containerSize.width]);
+
+  const equipmentSize = useMemo(() => {
+    if (!stageWidth) return 80;
+    // Scale equipment with the stage, but keep sensible bounds
+    return Math.min(90, Math.max(56, stageWidth * 0.08));
+  }, [stageWidth]);
+
+  const clampToStage = useCallback(
+    (value: number, max: number) => {
+      const margin = equipmentSize / 2;
+      return Math.max(margin, Math.min(max - margin, value));
+    },
+    [equipmentSize]
+  );
+
+  const handleStagePress = useCallback((event: any) => {
+    if (placingMode && onStagePress && stageWidth && stageHeight) {
       const { locationX, locationY } = event.nativeEvent;
-      const relativeX = Math.max(40, Math.min(LAYOUT_WIDTH - 40, locationX)) / LAYOUT_WIDTH;
-      const relativeY = Math.max(40, Math.min(LAYOUT_HEIGHT - 40, locationY)) / LAYOUT_HEIGHT;
+      const clampedX = clampToStage(locationX, stageWidth);
+      const clampedY = clampToStage(locationY, stageHeight);
+      const relativeX = clampedX / stageWidth;
+      const relativeY = clampedY / stageHeight;
       onStagePress({ x: relativeX, y: relativeY });
     }
-  };
+  }, [clampToStage, onStagePress, placingMode, stageHeight, stageWidth]);
+
+  const isReady = stageWidth > 0 && stageHeight > 0;
 
   return (
-    <View style={styles.container}>
-      {/* Audience label */}
-      <Text style={[styles.areaLabel, { top: 60 }]}>AUDIENCE</Text>
+    <View style={styles.container} onLayout={handleContainerLayout}>
+      {isReady && (
+        <>
+          {/* Audience label */}
+          <Text style={[styles.areaLabel, styles.audienceLabel]}>AUDIENCE</Text>
       
-      {/* Stage area */}
-      <TouchableOpacity
-        style={[styles.stageArea, { width: LAYOUT_WIDTH, height: LAYOUT_HEIGHT }]}
-        onPress={handleStagePress}
-        activeOpacity={placingMode ? 0.8 : 1}
-        disabled={!placingMode}
-      >
-        {equipment.map((item) => (
-          <View
-            key={item.id}
-            style={[
-              styles.equipmentPosition,
-              {
-                left: item.position.x * LAYOUT_WIDTH - 40,
-                top: item.position.y * LAYOUT_HEIGHT - 40,
-              },
-            ]}
+          {/* Stage area */}
+          <TouchableOpacity
+            style={[styles.stageArea, { width: stageWidth, height: stageHeight }]}
+            onPress={handleStagePress}
+            activeOpacity={placingMode ? 0.8 : 1}
+            disabled={!placingMode}
           >
-            <EquipmentItem
-              equipment={item}
-              onPress={() => onEquipmentPress?.(item)}
-            />
-          </View>
-        ))}
-        
-        {/* Stage label */}
-        <Text style={[styles.areaLabel, styles.stageLabel]}>STAGE</Text>
-        
-        {placingMode && (
-          <View style={styles.placingOverlay}>
-            <Text style={styles.placingText}>Tap anywhere to place equipment</Text>
-          </View>
-        )}
-      </TouchableOpacity>
+            {equipment.map((item) => (
+              <View
+                key={item.id}
+                style={[
+                  styles.equipmentPosition,
+                  {
+                    width: equipmentSize,
+                    height: equipmentSize,
+                    left: item.position.x * stageWidth - equipmentSize / 2,
+                    top: item.position.y * stageHeight - equipmentSize / 2,
+                  },
+                ]}
+              >
+                <EquipmentItem
+                  equipment={item}
+                  onPress={() => onEquipmentPress?.(item)}
+                />
+              </View>
+            ))}
+            
+            {/* Stage label */}
+            <Text style={[styles.areaLabel, styles.stageLabel]}>STAGE</Text>
+            
+            {placingMode && (
+              <View style={styles.placingOverlay}>
+                <Text style={styles.placingText}>Tap anywhere to place equipment</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </>
+      )}
     </View>
   );
 };
@@ -77,6 +128,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     position: 'relative',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
   },
   stageArea: {
     backgroundColor: COLORS.shadowBlue,
@@ -94,10 +147,13 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bold,
     color: COLORS.slateMist,
     letterSpacing: 8,
-    position: 'absolute',
-    alignSelf: 'center',
+  },
+  audienceLabel: {
+    marginBottom: 12,
   },
   stageLabel: {
+    position: 'absolute',
+    alignSelf: 'center',
     top: '50%',
     transform: [{ translateY: -13 }],
   },

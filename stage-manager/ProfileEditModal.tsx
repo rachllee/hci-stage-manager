@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
   TextInput,
 } from 'react-native';
-import { COLORS, FONTS } from './constants';
+import { COLORS, FONTS, getInitials } from './constants';
 
 interface ProfileEditModalProps {
   visible: boolean;
@@ -42,7 +42,7 @@ export const ProfileEditModal = ({
 
   const getPreviewInitials = () => {
     if (!name.trim()) return currentInitials;
-    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+    return getInitials(name, currentInitials);
   };
 
   return (

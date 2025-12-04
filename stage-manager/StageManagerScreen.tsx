@@ -20,7 +20,7 @@ import { ProfileEditModal } from './ProfileEditModal';
 import { MenuModal } from './MenuModal';
 import StyleGuideViewer from './StyleGuideViewer';
 import { FilterType, Equipment, Issue } from './types';
-import { COLORS, FONTS, MOCK_EQUIPMENT, MOCK_ISSUES, TEAM_MEMBERS, updateTeamMember } from './constants';
+import { COLORS, FONTS, MOCK_EQUIPMENT, MOCK_ISSUES, DEFAULT_TEAM_MEMBERS, TeamMember, getInitials } from './constants';
 
 const FONT_RESOURCES: Record<string, FontSource> = {
   'Inter-Regular': {
@@ -52,6 +52,7 @@ type SerializedIssue = Omit<Issue, 'reportedAt'> & { reportedAt: string };
 type StageStatePayload = {
   equipment: Equipment[];
   issues: SerializedIssue[];
+  teamMembers: TeamMember[];
 };
 
 type StageSyncExtra = {
@@ -172,7 +173,11 @@ const getSyncServerUrl = () => {
   return `ws://${host}:${port}`;
 };
 
-const serializeStageState = (equipment: Equipment[], issues: Issue[]): StageStatePayload => ({
+const serializeStageState = (
+  equipment: Equipment[],
+  issues: Issue[],
+  teamMembers: TeamMember[]
+): StageStatePayload => ({
   equipment,
   issues: issues.map((issue) => ({
     ...issue,
@@ -181,6 +186,7 @@ const serializeStageState = (equipment: Equipment[], issues: Issue[]): StageStat
         ? issue.reportedAt.toISOString()
         : new Date(issue.reportedAt).toISOString(),
   })),
+  teamMembers,
 });
 
 const deserializeStageState = (payload?: StageStatePayload | null) => {
@@ -191,6 +197,7 @@ const deserializeStageState = (payload?: StageStatePayload | null) => {
       ...issue,
       reportedAt: new Date(issue.reportedAt),
     })),
+    teamMembers: payload.teamMembers ?? DEFAULT_TEAM_MEMBERS,
   };
 };
 
@@ -214,6 +221,7 @@ export default function StageManagerScreen() {
   
   // Current user state
   const [currentUser, setCurrentUser] = useState({ id: 'kp', name: 'KP', initials: 'KP' });
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(DEFAULT_TEAM_MEMBERS);
   
   // Modal states
   const [createIssueModalVisible, setCreateIssueModalVisible] = useState(false);
@@ -296,6 +304,7 @@ export default function StageManagerScreen() {
               lastBroadcastRef.current = JSON.stringify(message.payload);
               setEquipment(nextState.equipment);
               setIssues(nextState.issues);
+              setTeamMembers(nextState.teamMembers);
               setTimeout(() => {
                 isApplyingRemoteRef.current = false;
               }, 0);
@@ -355,7 +364,7 @@ export default function StageManagerScreen() {
       return;
     }
 
-    const payload = serializeStageState(equipment, issues);
+    const payload = serializeStageState(equipment, issues, teamMembers);
     const payloadHash = JSON.stringify(payload);
 
     if (lastBroadcastRef.current === payloadHash) {
@@ -379,7 +388,7 @@ export default function StageManagerScreen() {
     } catch (error) {
       console.warn('Failed to broadcast stage update', error);
     }
-  }, [equipment, issues, syncStatus, syncUrl, clientId]);
+  }, [equipment, issues, teamMembers, syncStatus, syncUrl, clientId]);
 
   // Active issues - exclude resolved
   const activeIssues = issues.filter(issue => issue.status !== 'resolved');
@@ -401,7 +410,7 @@ export default function StageManagerScreen() {
   );
   
   // Get selected user info
-  const selectedUserInfo = TEAM_MEMBERS.find(m => m.id === selectedUserId) || currentUser;
+  const selectedUserInfo = teamMembers.find(m => m.id === selectedUserId) || currentUser;
 
   const syncBannerMeta = useMemo(() => {
     switch (syncStatus) {
@@ -429,22 +438,21 @@ export default function StageManagerScreen() {
   };
 
   const handleProfileEdit = (newName: string) => {
-    const { newInitials, newId } = updateTeamMember(currentUser.initials, newName);
+    const newInitials = getInitials(newName, currentUser.initials);
+    const newId = newInitials.toLowerCase();
+
+    setTeamMembers((prev) => {
+      const updatedMember = { id: newId, name: newName, initials: newInitials };
+      const alreadyExists = prev.some((member) => member.id === newId);
+      if (alreadyExists) return prev;
+      return [...prev, updatedMember];
+    });
     
     // Update current user
     setCurrentUser({ id: newId, name: newName, initials: newInitials });
     
     // Reset selected user to new current user
     setSelectedUserId(newId);
-    
-    // Update all issues that had the old user ID
-    setIssues(issues.map(issue => ({
-      ...issue,
-      assignedTo: issue.assignedTo?.map(id => 
-        id === currentUser.id ? newId : id
-      ),
-      reportedBy: issue.reportedBy === currentUser.id ? newId : issue.reportedBy,
-    })));
     
     setProfileEditModalVisible(false);
   };
@@ -639,7 +647,7 @@ export default function StageManagerScreen() {
             {assignedTasksMenuVisible && usersWithTasks.length > 0 && (
               <View style={styles.userFilterMenu}>
                 {usersWithTasks.map((userId) => {
-                  const user = TEAM_MEMBERS.find(m => m.id === userId);
+                  const user = teamMembers.find(m => m.id === userId);
                   if (!user) return null;
                   return (
                     <TouchableOpacity
@@ -696,6 +704,7 @@ export default function StageManagerScreen() {
         visible={createIssueModalVisible}
         equipment={selectedEquipment}
         existingIssue={existingIssue}
+        teamMembers={teamMembers}
         onClose={() => {
           setCreateIssueModalVisible(false);
           setSelectedEquipment(null);

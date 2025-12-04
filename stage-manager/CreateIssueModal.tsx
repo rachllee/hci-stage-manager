@@ -9,7 +9,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Equipment, Issue, IssueStatus } from './types';
-import { COLORS, FONTS, TEAM_MEMBERS } from './constants';
+import { COLORS, FONTS, TeamMember } from './constants';
 import { TimePicker } from './TimePicker';
 
 // Custom status colors (excluding red, yellow, green)
@@ -28,6 +28,7 @@ interface CreateIssueModalProps {
   visible: boolean;
   equipment: Equipment | null;
   existingIssue?: Issue | null;
+  teamMembers: TeamMember[];
   onClose: () => void;
   onSave: (issueData: {
     equipmentId: string;
@@ -45,6 +46,7 @@ export const CreateIssueModal = ({
   visible,
   equipment,
   existingIssue,
+  teamMembers,
   onClose,
   onSave,
 }: CreateIssueModalProps) => {
@@ -204,7 +206,7 @@ export const CreateIssueModal = ({
               {/* Problem Assignment */}
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Problem Assignment</Text>
-                {TEAM_MEMBERS.map((member) => (
+                {teamMembers.map((member) => (
                   <TouchableOpacity
                     key={member.id}
                     style={[
